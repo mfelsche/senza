@@ -4,7 +4,7 @@ import re
 from .error_handling import HandleExceptions
 
 REGION_PATTERN = re.compile(r'^[a-z]{2}-[a-z]+-[0-9]$')
-
+VPC_PATTERN = re.compile(r'^vpc-[a-z0-9]{8}$')
 
 def validate_region(ctx, param, value):
     """Validate Click region param parameter."""
@@ -12,6 +12,13 @@ def validate_region(ctx, param, value):
         if not REGION_PATTERN.match(value):
             raise click.BadParameter("'{}'. Region must be a valid "
                                      "AWS region.".format(value))
+    return value
+
+
+def validate_vpc(ctx, param, value):
+    if value is not None:
+        if not VPC_PATTERN.match(value):
+            raise click.BadParameter("'{}'. VPC must be a valid AWS vpc id.".format(value))
     return value
 
 
@@ -24,6 +31,12 @@ region_option = click.option('--region',
                              metavar='AWS_REGION_ID',
                              help='AWS region ID (e.g. eu-west-1)',
                              callback=validate_region)
+
+vpc_option = click.option('--vpc',
+                          envvar='AWS_VPC',
+                          metavar='AWS_VPC',
+                          help='AWS VPC ID (e.g. vpc-12345678 )',
+                          callback=validate_vpc)
 
 parameter_file_option = click.option('--parameter-file',
                                      help='Config file for params',

@@ -28,7 +28,7 @@ from clickclick.console import print_table
 import senza
 from .arguments import (json_output_option, output_option,
                         parameter_file_option, region_option,
-                        stacktrace_visible_option, watch_option,
+                        stacktrace_visible_option, vpc_option, watch_option,
                         watchrefresh_option)
 from .aws import (parse_time, get_required_capabilities, resolve_topic_arn,
                   get_stacks, StackReference, matches_any, get_account_id,
@@ -248,8 +248,9 @@ def evaluate(definition, args, account_info, force: bool):
 @click.option('-V', '--version', is_flag=True, callback=print_version, expose_value=False, is_eager=True,
               help='Print the current version number and exit.')
 @region_option
-def cli(region):
-    GLOBAL_OPTIONS['region'] = region
+@vpc_option
+def cli(region, vpc):
+    GLOBAL_OPTIONS.update({'region': region, 'vpc': vpc})
 
 
 class TemplateArguments:
@@ -266,14 +267,14 @@ class AccountArguments:
     >>> test.Region
     'blubber'
     """
-    def __init__(self, region):
+    def __init__(self, region, vpc=None):
         self.Region = region
+        self.__VpcID = vpc
         self.__AccountAlias = None
         self.__AccountID = None
         self.__Domain = None
         self.__MintBucket = None
         self.__TeamID = None
-        self.__VpcID = None
 
     @property
     def AccountID(self):
@@ -437,6 +438,20 @@ def get_region(region):
     return region
 
 
+def get_vpc(vpc, region=None):
+    if not vpc:
+        vpc = GLOBAL_OPTIONS.get('vpc')
+    if vpc:
+        # verify
+        region = get_region(region)
+        ec2 = boto3.resource('ec2', region_name=region)
+        try:
+            ec2.Vpc(vpc).load()
+        except ClientError:
+            raise click.UsageError('Invalid vpc "{}"'.format(vpc))
+    return vpc
+
+
 def check_credentials(region):
     iam = boto3.client('iam')
     return iam.list_account_aliases()
@@ -539,18 +554,20 @@ def list_stacks(region, stack_ref, all, output, w, watch):
 @click.argument('version', callback=validate_version)
 @click.argument('parameter', nargs=-1)
 @region_option
+@vpc_option
 @parameter_file_option
 @click.option('--disable-rollback', is_flag=True, help='Disable Cloud Formation rollback on failure')
 @click.option('--dry-run', is_flag=True, help='No-op mode: show what would be created')
 @click.option('-f', '--force', is_flag=True, help='Ignore failing validation checks')
 @click.option('-t', '--tag', help='Tags to associate with the stack.', multiple=True)
 @stacktrace_visible_option
-def create(definition, region, version, parameter, disable_rollback, dry_run,
+def create(definition, region, vpc, version, parameter, disable_rollback, dry_run,
            force, tag, parameter_file):
     '''Create a new Cloud Formation stack from the given Senza definition file'''
 
     region = get_region(region)
-    data = create_cf_template(definition, region, version, parameter, force, parameter_file)
+    vpc = get_vpc(vpc, region)
+    data = create_cf_template(definition, region, vpc, version, parameter, force, parameter_file)
 
     for tag_kv in tag:
         try:
@@ -580,17 +597,19 @@ def create(definition, region, version, parameter, disable_rollback, dry_run,
 @click.argument('version', callback=validate_version)
 @click.argument('parameter', nargs=-1)
 @region_option
+@vpc_option
 @parameter_file_option
 @click.option('--disable-rollback', is_flag=True, help='Disable Cloud Formation rollback on failure')
 @click.option('--dry-run', is_flag=True, help='No-op mode: show what would be created')
 @click.option('-f', '--force', is_flag=True, help='Ignore failing validation checks')
 @stacktrace_visible_option
-def update(definition, region, version, parameter, disable_rollback, dry_run,
+def update(definition, region, vpc, version, parameter, disable_rollback, dry_run,
            force, parameter_file):
     '''Update an existing Cloud Formation stack from the given Senza definition file'''
 
     region = get_region(region)
-    data = create_cf_template(definition, region, version, parameter, force, parameter_file)
+    vpc = get_vpc(vpc, region)
+    data = create_cf_template(definition, region, vpc, version, parameter, force, parameter_file)
     cf = boto3.client('cloudformation', region)
 
     with Action('Updating Cloud Formation stack {}..'.format(data['StackName'])) as act:
@@ -609,26 +628,29 @@ def update(definition, region, version, parameter, disable_rollback, dry_run,
 @click.argument('version', callback=validate_version)
 @click.argument('parameter', nargs=-1)
 @region_option
+@vpc_option
 @parameter_file_option
 @json_output_option
 @click.option('-f', '--force', is_flag=True, help='Ignore failing validation checks')
 @stacktrace_visible_option
-def print_cfjson(definition, region, version, parameter, output, force,
+def print_cfjson(definition, region, vpc, version, parameter, output, force,
                  parameter_file):
     '''Print the generated Cloud Formation template'''
 
     region = get_region(region)
-    data = create_cf_template(definition, region, version, parameter, force, parameter_file)
+    vpc = get_vpc(vpc, region)
+    data = create_cf_template(definition, region, vpc, version, parameter, force, parameter_file)
     print_json(data['TemplateBody'], output)
 
 
-def create_cf_template(definition, region, version, parameter, force, parameter_file):
+def create_cf_template(definition, region, vpc, version, parameter, force, parameter_file):
     region = get_region(region)
+    vpc = get_vpc(vpc, region)
     if parameter_file:
         parameter_from_file = read_parameter_file(parameter_file)
         parameter = parameter + parameter_from_file
     check_credentials(region)
-    account_info = AccountArguments(region=region)
+    account_info = AccountArguments(region=region, vpc=vpc)
     args = parse_args(definition, region, version, parameter, account_info)
 
     with Action('Generating Cloud Formation template..') as action:
